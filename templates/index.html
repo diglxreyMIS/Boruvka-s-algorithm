@@ -1,0 +1,208 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Визуализатор алгоритма Борувки</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>Алгоритм Борувки: Построение MST</h1>
+        <p class="subtitle">Интерактивный тренажёр для анализа работы суперграфовых компонентов</p>
+    </header>
+
+    <main class="container">
+        <section class="panel control-panel">
+            <h2>1. Входные данные</h2>
+
+            <div class="form-group">
+                <label for="example-select">Выберите готовый пример:</label>
+                <select id="example-select">
+                    <option value="">-- Выберите из списка --</option>
+                </select>
+            </div>
+
+            <hr>
+
+            <div class="form-group">
+                <label for="vertex-count">Количество вершин (N):</label>
+                <input type="number" id="vertex-count" min="2" max="100" value="5">
+            </div>
+
+            <div class="form-group">
+                <label for="edges-input">Список рёбер (формат: <code>u v weight</code>, по одному на строку):</label>
+                <textarea id="edges-input" rows="8" placeholder="0 1 4&#10;0 2 3&#10;1 2 1"></textarea>
+            </div>
+
+            <button id="run-btn" class="btn btn-primary">Запустить алгоритм</button>
+            <div id="error-message" class="error-box hidden"></div>
+        </section>
+
+        <section class="panel results-panel">
+            <h2>2. Результаты трассировки</h2>
+
+            <div id="welcome-message">
+                <p>Задайте параметры графа или выберите пример, после чего нажмите «Запустить алгоритм» для генерации пошагового разбора.</p>
+            </div>
+
+            <div id="output-content" class="hidden">
+                <div class="summary-card">
+                    <h3>Итоговые метрики MST</h3>
+                    <p><strong>Статус связности:</strong> <span id="res-connected"></span></p>
+                    <p><strong>Общий вес минимального остова:</strong> <span id="res-weight" class="highlight"></span></p>
+                    <p><strong>Количество пройденных фаз:</strong> <span id="res-phases"></span></p>
+                </div>
+
+                <h3>Включенные рёбра в MST:</h3>
+                <ul id="mst-edges-list" class="edge-tags"></ul>
+
+                <h3>Пошаговый разбор фаз алгоритма:</h3>
+                <div id="phases-timeline"></div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2026 — Программный комплекс исследования графовых алгоритмов</p>
+    </footer>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            const exampleSelect = document.getElementById("example-select");
+            const vertexInput = document.getElementById("vertex-count");
+            const edgesInput = document.getElementById("edges-input");
+            const runBtn = document.getElementById("run-btn");
+            const errorBox = document.getElementById("error-message");
+            const welcomeMsg = document.getElementById("welcome-message");
+            const outputContent = document.getElementById("output-content");
+
+            // 1. Загрузка списка примеров при старте страницы
+            fetch("/examples")
+                .then(res => res.json())
+                .then(data => {
+                    data.forEach(ex => {
+                        const opt = document.createElement("option");
+                        opt.value = ex.id;
+                        opt.textContent = `${ex.name} (${ex.n} верш., ${ex.edges_count} рёбер)`;
+                        exampleSelect.appendChild(opt);
+                    });
+                });
+
+            // 2. Обработчик выбора готового примера
+            exampleSelect.addEventListener("change", (e) => {
+                const id = e.target.value;
+                if (!id) return;
+
+                fetch(`/example/${id}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        vertexInput.value = data.n;
+                        edgesInput.value = data.edges.map(edge => edge.join(" ")).join("\n");
+                        errorBox.classList.add("hidden");
+                    });
+            });
+
+            // 3. Запуск расчёта
+            runBtn.addEventListener("click", () => {
+                errorBox.classList.add("hidden");
+
+                const n = parseInt(vertexInput.value, 10);
+                const lines = edgesInput.value.trim().split("\n");
+                const edges = [];
+
+                for (let i = 0; i < lines.length; i++) {
+                    if (!lines[i].trim()) continue;
+                    const parts = lines[i].trim().split(/\s+/);
+                    if (parts.length !== 3) {
+                        showError(`Строка ${i + 1}: неверный формат. Должно быть 3 числа через пробел.`);
+                        return;
+                    }
+                    edges.push([parseInt(parts[0], 10), parseInt(parts[1], 10), parseInt(parts[2], 10)]);
+                }
+
+                // Отправка POST-запроса на бэкенд
+                fetch("/run", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ n, edges })
+                })
+                .then(res => {
+                    if (!res.ok) return res.json().then(err => { throw new Error(err.error) });
+                    return res.json();
+                })
+                .then(renderResults)
+                .catch(err => showError(err.message));
+            });
+
+            function showError(msg) {
+                errorBox.textContent = msg;
+                errorBox.classList.remove("hidden");
+                outputContent.classList.add("hidden");
+                welcomeMsg.classList.remove("hidden");
+            }
+
+            function renderResults(data) {
+                welcomeMsg.classList.add("hidden");
+                outputContent.classList.remove("hidden");
+
+                // Вывод общих результатов
+                document.getElementById("res-connected").textContent = data.connected ? "Связный граф" : "Несвязный граф (MST невозможен)";
+                document.getElementById("res-connected").className = data.connected ? "badge success" : "badge danger";
+                document.getElementById("res-weight").textContent = data.total_weight;
+                document.getElementById("res-phases").textContent = data.num_phases;
+
+                // Список рёбер MST
+                const mstList = document.getElementById("mst-edges-list");
+                mstList.innerHTML = "";
+                data.mst_edges.forEach(e => {
+                    const li = document.createElement("li");
+                    li.innerHTML = `<span class="edge-nodes">(${e.u} &harr; ${e.v})</span> вес: <strong>${e.w}</strong>`;
+                    mstList.appendChild(li);
+                });
+
+                // Отрисовка таймлайна фаз
+                const timeline = document.getElementById("phases-timeline");
+                timeline.innerHTML = "";
+
+                data.phases.forEach(p => {
+                    const phaseBlock = document.createElement("div");
+                    phaseBlock.className = "phase-block";
+
+                    let cheapestHtml = p.cheapest_edges.map(e =>
+                        `<li>Компонента корня <strong>${e.comp}</strong> выбрала ребро (${e.u} &harr; ${e.v}) весом ${e.w}</li>`
+                    ).join("");
+
+                    let addedHtml = p.added_edges.map(e =>
+                        `<li>Ребро (${e.u} &harr; ${e.v}) [вес ${e.w}] объединило вершины в общую компоненту ${e.comp_u}</li>`
+                    ).join("");
+
+                    if(addedHtml === "") addedHtml = "<li>Новые рёбра не добавлены (достигнут тупик/компоненты изолированы)</li>";
+
+                    let componentsHtml = p.components_after.map(comp =>
+                        `<span class="comp-tag">{ ${comp.join(", ")} }</span>`
+                    ).join(" ");
+
+                    phaseBlock.innerHTML = `
+                        <h4>Итерационная фаза №${p.phase}</h4>
+                        <div class="phase-section">
+                            <h5>Шаг 1. Локальный выбор минимальных рёбер для компонент:</h5>
+                            <ul>${cheapestHtml || "<li>Нет доступных рёбер</li>"}</ul>
+                        </div>
+                        <div class="phase-section">
+                            <h5>Шаг 2. Интеграция рёбер в структуру MST (исключая циклы):</h5>
+                            <ul>${addedHtml}</ul>
+                        </div>
+                        <div class="phase-section">
+                            <h5>Состояние компонент связности после фазы:</h5>
+                            <div class="components-container">${componentsHtml}</div>
+                            <p class="sub-info">Оставшееся число компонент: <strong>${p.num_components_after}</strong></p>
+                        </div>
+                    `;
+                    timeline.appendChild(phaseBlock);
+                });
+            }
+        });
+    </script>
+</body>
+</html>
